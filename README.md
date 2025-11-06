@@ -34,3 +34,25 @@ Not a full engine—this is a solver playground.
 3. Run a scene with both the baseline and SoA solvers; compare ADMC drift + timings.
 
 Everything else is optional experimentation.
+
+---
+
+## Building (Linux/macOS)
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+Requirements: CMake ≥ 3.20, a C++20 compiler (Clang/GCC), and a recent libc++/libstdc++.
+
+## Building (Windows / MSVC)
+
+```powershell
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release
+ctest --test-dir build --output-on-failure -C Release
+```
+
+Requirements: Visual Studio 2022 with C++ workload and CMake ≥ 3.20 (comes with VS).
