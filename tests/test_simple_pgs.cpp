@@ -79,7 +79,7 @@ void test_impulse_limits()
     island.constraints[0].row.bias = -2.0f;
 
     SimplePGSSolver solver;
-    solver.solve(island);
+    (void)solver.solve(island);
 
     expect(std::fabs(island.constraints[0].row.lambda) <= 0.25f + kTolerance, "Impulse limit enforced");
 }

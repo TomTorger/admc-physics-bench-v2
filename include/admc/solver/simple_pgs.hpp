@@ -55,7 +55,8 @@ public:
         ManifoldWarmstartScaler::Settings warmstart_settings{};
     };
 
-    explicit SimplePGSSolver(Options options = Options{}) noexcept;
+    SimplePGSSolver() noexcept;
+    explicit SimplePGSSolver(const Options& options) noexcept;
 
     [[nodiscard]] SolverResult solve(IslandState& island) const noexcept;
 
@@ -87,7 +88,9 @@ private:
     ManifoldWarmstartScaler scaler_;
 };
 
-inline SimplePGSSolver::SimplePGSSolver(Options options) noexcept
+inline SimplePGSSolver::SimplePGSSolver() noexcept : SimplePGSSolver(Options{}) {}
+
+inline SimplePGSSolver::SimplePGSSolver(const Options& options) noexcept
     : options_(options),
       gate_(options.gate_settings),
       scaler_(options.warmstart_settings)
