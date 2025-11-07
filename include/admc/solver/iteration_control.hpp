@@ -38,7 +38,8 @@ public:
         float focus_ratio{2.0f};
     };
 
-    explicit CompositeIterationGate(Settings settings = Settings{}) noexcept : settings_(settings) {}
+    CompositeIterationGate() noexcept = default;
+    explicit CompositeIterationGate(const Settings& settings) noexcept : settings_(settings) {}
 
     [[nodiscard]] IterationPolicy evaluate(const IterationSignals& signals) const noexcept
     {

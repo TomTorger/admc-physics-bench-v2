@@ -25,7 +25,8 @@ public:
         float sleeping_impulse{1.0e-3f};
     };
 
-    explicit ManifoldWarmstartScaler(Settings settings = Settings{}) noexcept : settings_(settings) {}
+    ManifoldWarmstartScaler() noexcept = default;
+    explicit ManifoldWarmstartScaler(const Settings& settings) noexcept : settings_(settings) {}
 
     [[nodiscard]] float scale_for(const ManifoldWarmstartSample& sample) const noexcept
     {
