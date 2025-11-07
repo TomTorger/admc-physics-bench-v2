@@ -1,0 +1,35 @@
+simple_bench: ./build/Debug/simple_bench.exe
+runs: 1
+
+scenes:
+  - name: two_spheres
+    args: []
+  - name: box_stack_3
+    args: []
+  - name: sphere_grid_4x4
+    args: []
+  - name: sphere_cloud_16x16
+    args: []
+  - name: sphere_cloud_32x32
+    args: []
+  - name: sphere_cloud_64x64
+    args: []
+
+solvers:
+  - name: simple
+    args:
+      - "--iterations=1"
+      - "--residual=0.01"
+      - "--penetration=0.01"
+      - "--joint=0.01"
+      - "--admc=0.005"
+  - name: baseline
+    args:
+      - "--iterations=1"
+      - "--residual=0.01"
+      - "--penetration=0.01"
+      - "--joint=0.01"
+      - "--admc=0.005"
+
+output:
+  csv: results/bench_summary.csv

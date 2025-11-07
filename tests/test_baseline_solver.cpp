@@ -1,4 +1,7 @@
 #include "admc/baseline/solver.hpp"
+#include "admc/scene/scene_builders.hpp"
+#include "admc/scene/scene_library.hpp"
+#include "admc/solver/simple_pgs.hpp"
 
 #include "admc/core/mat3.hpp"
 #include "admc/core/quat.hpp"
@@ -8,6 +11,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <string>
 #include <vector>
 
 using admc::baseline::BaselineParams;
@@ -19,6 +23,8 @@ using admc::core::Vec3;
 using admc::core::dot;
 using admc::core::length;
 using admc::core::normalize;
+using admc::scene::SceneDesc;
+using admc::solver::SimplePGSSolver;
 using admc::world::RigidBody;
 
 namespace
@@ -81,7 +87,7 @@ void test_dynamic_pair()
 
     const float initial_relative = std::fabs((bodies[0].linear_velocity - bodies[1].linear_velocity).x);
 
-    solve_baseline(bodies, contacts, params);
+    (void)solve_baseline(bodies, contacts, params);
 
     const Vec3 relative = bodies[0].linear_velocity - bodies[1].linear_velocity;
     expect(std::fabs(relative.x) < initial_relative, "Relative normal velocity reduced");
@@ -119,16 +125,50 @@ void test_static_ground()
     params.beta = 0.4f;
     params.slop = 0.0f;
 
-    solve_baseline(bodies, contacts, params);
+    (void)solve_baseline(bodies, contacts, params);
 
     expect(bodies[1].linear_velocity.y == 0.0f, "Static ground remains static");
     expect(bodies[0].linear_velocity.y > -5.0f, "Falling body slowed by ground");
+}
+
+void test_scene_conversion()
+{
+    const SceneDesc scene = admc::scene::make_two_spheres_scene();
+    BaselineParams params{};
+    params.iterations = 10;
+
+    auto baseline_scene = admc::scene::build_baseline_scene(scene, params);
+    (void)solve_baseline(baseline_scene.bodies, baseline_scene.contacts, params);
+    expect(!baseline_scene.contacts.empty(), "Scene produced contacts");
+
+    auto island = admc::scene::build_simple_island(scene, params);
+    SimplePGSSolver solver;
+    const auto result = solver.solve(island);
+    expect(result.iterations > 0, "Simple solver ran iterations");
+}
+
+void test_scene_library_inventory()
+{
+    const auto scenes = admc::scene::make_default_scene_library();
+    expect(!scenes.empty(), "Scene library not empty");
+    bool found_grid = false;
+    for (const SceneDesc& scene : scenes)
+    {
+        if (scene.name.find("sphere_grid") != std::string::npos)
+        {
+            found_grid = true;
+            expect(scene.contacts.size() >= scene.bodies.size(), "Sphere grid has ground + neighbor contacts");
+        }
+    }
+    expect(found_grid, "Sphere grid scenes available");
 }
 
 int main()
 {
     test_dynamic_pair();
     test_static_ground();
+    test_scene_conversion();
+    test_scene_library_inventory();
     std::cout << "Baseline solver tests passed\n";
     return 0;
 }

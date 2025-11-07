@@ -121,5 +121,9 @@ Every new solver must:
   - `solver_policy_tests` lock down iteration gates, warm-start scaling, and the constraint-operator surface.
   - `simple_pgs_tests` ensure the toy solver reduces relative velocities and respects impulse bounds.
   - `baseline_tests` keep the AoS sequential impulse reference solver aligned with the original repo.
+- `scene_builders` + `simple_bench` + Python bench CLI:
+  - `scene_library` exposes canned scenes (`two_spheres`, `box_stack_N`, `sphere_grid_4x4`, `sphere_grid_8x8`, `sphere_cloud_16x16/32x32/64x64`) for both solvers.
+  - CLI flags: `--solver=simple|baseline|both`, `--scene=name`, `--csv path/to/results.csv`.
+  - `python -m bench.cli --config <yaml>` orchestrates multi-scene sweeps and aggregates CSVs; CSV columns now include `total_ms`, `warm_ms`, `iteration_ms`, `iterations`, and `residual` (all sourced from solver instrumentation). Default configs set a high iteration cap (64) and lean on the adaptive gate thresholds to stop early.
 
 Fail any of these checks and the solver does not land.

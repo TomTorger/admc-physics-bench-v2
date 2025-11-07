@@ -1,35 +1,33 @@
 #include "admc/baseline/solver.hpp"
+#include "admc/scene/scene_builders.hpp"
+#include "admc/scene/scene_library.hpp"
+#include "admc/solver/conservation_tracker.hpp"
+#include "admc/solver/constraint_batch_cache.hpp"
 #include "admc/solver/simple_pgs.hpp"
-#include "admc/world/body.hpp"
+#include "admc/solver/tile_pgs.hpp"
 
-#include "admc/core/mat3.hpp"
-#include "admc/core/quat.hpp"
-#include "admc/core/vec3.hpp"
-
+#include <chrono>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <string>
 #include <string_view>
 #include <vector>
 
 using admc::baseline::BaselineParams;
-using admc::baseline::ContactConstraint;
 using admc::baseline::solve_baseline;
-using admc::core::Mat3;
-using admc::core::Quat;
-using admc::core::Vec3;
-using admc::solver::ConstraintInstance;
-using admc::solver::IslandState;
+using admc::scene::SceneDesc;
 using admc::solver::SimplePGSSolver;
-using admc::solver::SolverBody;
-using admc::world::RigidBody;
 
 namespace
 {
-enum class SolverMode
+enum class SolverMask : unsigned
 {
-    SimplePGS,
-    Baseline
+    Simple = 1u << 0,
+    Baseline = 1u << 1,
+    Both = Simple | Baseline
 };
 
 struct BenchConfig
@@ -39,7 +37,9 @@ struct BenchConfig
     float penetration_threshold{1.0e-3f};
     float joint_threshold{1.0e-3f};
     float admc_threshold{5.0e-4f};
-    SolverMode solver{SolverMode::SimplePGS};
+    SolverMask solvers{SolverMask::Both};
+    std::string scene_filter{};
+    std::string csv_path{};
 };
 
 BenchConfig parse_config(int argc, char** argv)
@@ -77,152 +77,176 @@ BenchConfig parse_config(int argc, char** argv)
             const std::string value = std::string(arg.substr(9));
             if (value == "baseline")
             {
-                config.solver = SolverMode::Baseline;
+                config.solvers = SolverMask::Baseline;
+            }
+            else if (value == "simple")
+            {
+                config.solvers = SolverMask::Simple;
             }
             else
             {
-                config.solver = SolverMode::SimplePGS;
+                config.solvers = SolverMask::Both;
             }
+        }
+        else if (arg.rfind("--scene=", 0) == 0)
+        {
+            config.scene_filter = std::string(arg.substr(8));
+        }
+        else if (arg.rfind("--csv=", 0) == 0)
+        {
+            config.csv_path = std::string(arg.substr(6));
         }
     }
     return config;
 }
 
-IslandState make_simple_island()
+struct BenchMeasurement
 {
-    IslandState island;
-    island.bodies.push_back(SolverBody{
-        .linear_velocity = Vec3{1.0f, -0.5f, 0.0f},
-        .angular_velocity = Vec3{},
-        .inverse_mass = 1.0f,
-        .inverse_inertia = Mat3::identity()});
-    island.bodies.push_back(SolverBody{
-        .linear_velocity = Vec3{-0.5f, 0.25f, 0.0f},
-        .angular_velocity = Vec3{},
-        .inverse_mass = 1.0f,
-        .inverse_inertia = Mat3::identity()});
+    std::string scene;
+    std::string solver;
+    std::size_t contacts{0};
+    double assembly_ms{0.0};
+    double total_ms{0.0};
+    double warm_ms{0.0};
+    double iteration_ms{0.0};
+    int iterations{0};
+    float residual{0.0f};
+};
 
-    ConstraintInstance normal{};
-    normal.body_a = 0;
-    normal.body_b = 1;
-    normal.row.type = admc::constraints::ConstraintType::ContactNormal;
-    normal.row.jacobian_linear_a = Vec3{1.0f, 0.0f, 0.0f};
-    normal.row.jacobian_linear_b = Vec3{-1.0f, 0.0f, 0.0f};
-    normal.row.effective_mass = 0.5f;
-    normal.row.lower_limit = 0.0f;
-    normal.row.upper_limit = 10.0f;
-    normal.row.bias = 0.0f;
-
-    ConstraintInstance joint{};
-    joint.body_a = 0;
-    joint.body_b = 1;
-    joint.row.type = admc::constraints::ConstraintType::Joint;
-    joint.row.jacobian_linear_a = Vec3{0.0f, 1.0f, 0.0f};
-    joint.row.jacobian_linear_b = Vec3{0.0f, -1.0f, 0.0f};
-    joint.row.effective_mass = 0.5f;
-    joint.row.lower_limit = -1.0f;
-    joint.row.upper_limit = 1.0f;
-    joint.row.bias = 0.1f;
-
-    island.constraints.push_back(normal);
-    island.constraints.push_back(joint);
-    return island;
-}
-
-RigidBody make_rigidbody(const Vec3& position, const Vec3& velocity, float mass)
+bool has_solver(SolverMask mask, SolverMask flag)
 {
-    RigidBody body{};
-    body.position = position;
-    body.orientation = Quat::identity();
-    body.linear_velocity = velocity;
-    body.angular_velocity = Vec3{};
-    body.set_mass(mass);
-    body.inertia_body = Mat3::identity();
-    body.update_world_inertia();
-    return body;
-}
-
-std::vector<RigidBody> make_baseline_bodies()
-{
-    std::vector<RigidBody> bodies;
-    bodies.push_back(make_rigidbody(Vec3{-0.5f, 0.0f, 0.0f}, Vec3{1.0f, -0.5f, 0.0f}, 1.0f));
-    bodies.push_back(make_rigidbody(Vec3{0.5f, 0.0f, 0.0f}, Vec3{-0.5f, 0.25f, 0.0f}, 1.0f));
-    return bodies;
-}
-
-std::vector<ContactConstraint> make_baseline_contacts()
-{
-    ContactConstraint normal{};
-    normal.body_a = 0;
-    normal.body_b = 1;
-    normal.point = Vec3{0.0f, 0.0f, 0.0f};
-    normal.normal = Vec3{1.0f, 0.0f, 0.0f};
-    normal.penetration = 0.05f;
-    normal.restitution = 0.0f;
-    return {normal};
+    return (static_cast<unsigned>(mask) & static_cast<unsigned>(flag)) != 0;
 }
 } // namespace
 
 int main(int argc, char** argv)
 {
     const BenchConfig config = parse_config(argc, argv);
+    const auto scenes = admc::scene::make_default_scene_library();
 
-    if (config.solver == SolverMode::SimplePGS)
+    BaselineParams baseline_params{};
+    baseline_params.iterations = config.iterations;
+    baseline_params.slop = config.penetration_threshold;
+    baseline_params.beta = 0.25f;
+    baseline_params.restitution = 0.0f;
+
+    SimplePGSSolver::Options simple_options{};
+    simple_options.max_iterations = config.iterations;
+    simple_options.gate_settings.thresholds.residual = config.residual_threshold;
+    simple_options.gate_settings.thresholds.penetration = config.penetration_threshold;
+    simple_options.gate_settings.thresholds.joint = config.joint_threshold;
+    simple_options.gate_settings.thresholds.admc = config.admc_threshold;
+    admc::solver::AdaptiveConservationTracker simple_tracker(simple_options.gate_settings);
+    admc::solver::ConstraintBatchCache batch_cache;
+    admc::solver::TilePGSSolver tile_solver(admc::solver::TilePGSSolver::Options{
+        .max_iterations = simple_options.max_iterations,
+        .gate_settings = simple_options.gate_settings,
+        .warmstart_settings = simple_options.warmstart_settings});
+
+    std::vector<BenchMeasurement> measurements;
+
+    for (std::size_t scene_index = 0; scene_index < scenes.size(); ++scene_index)
     {
-        IslandState island = make_simple_island();
+        const SceneDesc& scene = scenes[scene_index];
+        if (!config.scene_filter.empty() && scene.name != config.scene_filter)
+        {
+            continue;
+        }
 
-        SimplePGSSolver::Options options{};
-        options.max_iterations = config.iterations;
-        options.gate_settings.thresholds.residual = config.residual_threshold;
-        options.gate_settings.thresholds.penetration = config.penetration_threshold;
-        options.gate_settings.thresholds.joint = config.joint_threshold;
-        options.gate_settings.thresholds.admc = config.admc_threshold;
+        if (has_solver(config.solvers, SolverMask::Baseline))
+        {
+            auto baseline_scene = admc::scene::build_baseline_scene(scene, baseline_params);
+            const auto metrics = solve_baseline(baseline_scene.bodies, baseline_scene.contacts, baseline_params);
 
-        SimplePGSSolver solver{options};
-        const auto result = solver.solve(island);
+            measurements.push_back(BenchMeasurement{
+                scene.name,
+                "baseline",
+                baseline_scene.contacts.size(),
+                0.0,
+                metrics.warmstart_ms + metrics.iteration_ms,
+                metrics.warmstart_ms,
+                metrics.iteration_ms,
+                metrics.iterations,
+                metrics.max_residual});
+        }
 
-        std::cout << "[Simple PGS]\n";
-        std::cout << "Iterations (max): " << config.iterations << '\n';
-        std::cout << "Gate thresholds (residual/penetration/joint/admc): "
-                  << config.residual_threshold << " / "
-                  << config.penetration_threshold << " / "
-                  << config.joint_threshold << " / "
-                  << config.admc_threshold << '\n';
-        std::cout << "Iterations: " << result.iterations << '\n';
-        std::cout << "Residual: " << result.max_residual << '\n';
-        std::cout << "ADMC drift: " << result.admc_drift << '\n';
-        std::cout << "Body0 v: (" << island.bodies[0].linear_velocity.x << ", "
-                  << island.bodies[0].linear_velocity.y << ", "
-                  << island.bodies[0].linear_velocity.z << ")\n";
-        std::cout << "Body1 v: (" << island.bodies[1].linear_velocity.x << ", "
-                  << island.bodies[1].linear_velocity.y << ", "
-                  << island.bodies[1].linear_velocity.z << ")\n";
+        if (has_solver(config.solvers, SolverMask::Simple))
+        {
+            auto island = admc::scene::build_simple_island(scene, baseline_params);
+            const auto assembly_start = std::chrono::steady_clock::now();
+            admc::solver::ConstraintBatch& batch = batch_cache.rebuild(scene_index, island);
+            std::vector<float>& residuals = batch_cache.residuals(scene_index);
+            const auto assembly_end = std::chrono::steady_clock::now();
+            const double assembly_ms = std::chrono::duration<double, std::milli>(assembly_end - assembly_start).count();
+            const auto result = tile_solver.solve(island, batch, residuals, &simple_tracker);
+
+            measurements.push_back(BenchMeasurement{
+                scene.name,
+                "simple_pgs",
+                island.constraints.size(),
+                assembly_ms,
+                result.total_ms,
+                result.warmstart_ms,
+                result.iteration_ms,
+                result.iterations,
+                result.max_residual});
+        }
     }
-    else
+
+    if (measurements.empty())
     {
-        std::vector<RigidBody> bodies = make_baseline_bodies();
-        std::vector<ContactConstraint> contacts = make_baseline_contacts();
+        std::cout << "No scenes matched the provided filters.\n";
+        return 0;
+    }
 
-        BaselineParams params{};
-        params.iterations = config.iterations;
-        params.slop = config.penetration_threshold;
-        params.beta = 0.25f;
-        params.restitution = 0.0f;
+    std::cout << "Scene           Solver        Contacts  Assembly  Total(ms)  Warm(ms)  Iter(ms)  Iterations  Residual\n";
+    for (const BenchMeasurement& m : measurements)
+    {
+        std::cout << std::left << std::setw(15) << m.scene << ' '
+                  << std::setw(12) << m.solver
+                  << std::right << std::setw(9) << m.contacts << ' '
+                  << std::fixed << std::setprecision(3)
+                  << std::setw(9) << m.assembly_ms << ' '
+                  << std::fixed << std::setprecision(3)
+                  << std::setw(10) << m.total_ms << ' '
+                  << std::setw(9) << m.warm_ms << ' '
+                  << std::setw(9) << m.iteration_ms << ' '
+                  << std::defaultfloat
+                  << std::setw(11) << m.iterations << ' '
+                  << std::fixed << std::setprecision(4) << std::setw(9) << m.residual << '\n'
+                  << std::defaultfloat;
+    }
 
-        solve_baseline(bodies, contacts, params);
-
-        const Vec3 relative = bodies[1].linear_velocity - bodies[0].linear_velocity;
-
-        std::cout << "[Baseline AoS]\n";
-        std::cout << "Iterations: " << params.iterations << '\n';
-        std::cout << "Penetration slop: " << params.slop << '\n';
-        std::cout << "Relative normal velocity after solve: " << relative.x << '\n';
-        std::cout << "Body0 v: (" << bodies[0].linear_velocity.x << ", "
-                  << bodies[0].linear_velocity.y << ", "
-                  << bodies[0].linear_velocity.z << ")\n";
-        std::cout << "Body1 v: (" << bodies[1].linear_velocity.x << ", "
-                  << bodies[1].linear_velocity.y << ", "
-                  << bodies[1].linear_velocity.z << ")\n";
+    if (!config.csv_path.empty())
+    {
+        std::filesystem::path path = config.csv_path;
+        if (path.has_parent_path())
+        {
+            std::filesystem::create_directories(path.parent_path());
+        }
+        std::ofstream csv(path);
+        if (csv.is_open())
+        {
+            csv << "scene,contacts,solver,total_ms,warm_ms,iteration_ms,assembly_ms,iterations,residual\n";
+            for (const BenchMeasurement& m : measurements)
+            {
+                csv << m.scene << ','
+                    << m.contacts << ','
+                    << m.solver << ','
+                    << std::fixed << std::setprecision(6) << m.total_ms << ','
+                    << m.warm_ms << ','
+                    << m.iteration_ms << ','
+                    << m.assembly_ms << ','
+                    << m.iterations << ','
+                    << m.residual << '\n';
+            }
+            std::cout << "CSV written to " << path << '\n';
+        }
+        else
+        {
+            std::cerr << "Failed to open CSV path: " << path << '\n';
+            return 1;
+        }
     }
 
     return 0;

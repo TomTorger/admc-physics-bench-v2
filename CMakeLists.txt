@@ -3,6 +3,8 @@ project(admc LANGUAGES CXX)
 
 option(ADMC_ENABLE_WARNINGS "Enable extra compiler warnings" ON)
 
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
 add_library(admc_core INTERFACE)
 target_include_directories(admc_core INTERFACE ${CMAKE_SOURCE_DIR}/include)
 target_compile_features(admc_core INTERFACE cxx_std_20)
@@ -33,3 +35,8 @@ add_test(NAME core_tests COMMAND $<TARGET_FILE:core_tests>)
 add_test(NAME solver_policy_tests COMMAND $<TARGET_FILE:solver_policy_tests>)
 add_test(NAME simple_pgs_tests COMMAND $<TARGET_FILE:simple_pgs_tests>)
 add_test(NAME baseline_tests COMMAND $<TARGET_FILE:baseline_tests>)
+add_test(
+    NAME bench_smoke
+    COMMAND Python3::Interpreter ${CMAKE_SOURCE_DIR}/tests/bench_smoke_check.py
+            $<TARGET_FILE:simple_bench> ${CMAKE_BINARY_DIR}/bench_smoke.csv
+)

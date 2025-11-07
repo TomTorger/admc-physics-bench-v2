@@ -265,8 +265,15 @@ Used by: `solver_core`, `parallel`, `api`.
 * `admc/baseline/contact.hpp` + `admc/baseline/solver.hpp` keep the scalar reference path alive:
 
   * `ContactConstraint` stores AoS contact state and cached denominators.
-  * `solve_baseline(...)` runs Baumgarte-stabilized sequential impulses directly on `world::RigidBody`.
+  * `solve_baseline(...)` runs Baumgarte-stabilized sequential impulses directly on `world::RigidBody`, with the same adaptive iteration gate/thresholds used by the SoA solver so comparisons stay fair.
 * Used for regression parity (`baseline_tests`) and bench comparisons (`simple_bench --solver=baseline`).
+
+### 6.6b `scene/`
+
+* Scene descriptions + builders for feeding both the AoS baseline and the SoA toy solver.
+* `scene_desc.hpp` defines body/contact structs (positions, velocities, normals).
+* `scene_builders.hpp` converts those descriptions into AoS (`ContactConstraint`) and SoA (`solver::IslandState`) inputs.
+* `scene_library.hpp` hosts canned scenes (two spheres, box stack) for benches/tests.
 
 
 **Entry:**

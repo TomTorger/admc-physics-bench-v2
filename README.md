@@ -31,12 +31,36 @@ Not a full engine—this is a solver playground.
 
 1. Read `docs/architecture_overview.md` to understand the stack.
 2. Build the bench app (`simple_bench`) or the unit suites.
-3. Run the lightweight bench to explore iteration thresholds:
+3. Run the lightweight bench to explore iteration thresholds or export CSV snapshots:
    ```bash
-   ./build/simple_bench --iterations=12 --admc=0.0002
+   ./build/simple_bench --iterations=12 --admc=0.0002 --csv results/latest.csv
    ```
    Add `--solver=baseline` to compare against the AoS baseline derived from the original repo.
+   Use `--scene=two_spheres` to target a specific scene; omit to process the default library.
 4. Run a scene with both the baseline and SoA solvers; compare ADMC drift + timings.
+
+## Built-in scenes
+
+`simple_bench` and the tests share the small scene library in `admc/scene/scene_library.hpp`:
+
+- `two_spheres` – opposing impulses, single contact pair.
+- `box_stack_N` – small vertical stacks resting on a static ground.
+- `sphere_grid_4x4`, `sphere_grid_8x8` – ground-supported sphere arrays with lateral contacts.
+- `sphere_cloud_16x16`, `sphere_cloud_32x32`, `sphere_cloud_64x64` – larger grids approximating the legacy “sphere cloud” scenes.
+
+Each scene can be filtered via `--scene=<name>` and every solver run can be exported to CSV via `--csv path/to/results.csv`.
+
+## Python bench orchestrator
+
+For more complex sweeps (multiple scenes/solvers, repeated runs, CSV aggregation) use the Python helper:
+
+```bash
+python -m bench.cli --config bench/templates/default.yaml
+```
+
+Edit the YAML to point at your `simple_bench` binary (Debug/Release), add scenes (`two_spheres`, `box_stack_3`, `sphere_grid_4x4`, …), and customize solver arguments. The script runs every combination, aggregates medians, and writes a summary CSV plus a concise console table.
+
+Each CSV row now contains timing breakdowns (`total_ms`, `warm_ms`, `iteration_ms`), the iteration count actually used (adaptive gate), and the final residual for that solver/scene. In the default config both solvers run with a high iteration cap (64) and rely on the adaptive gate / residual thresholds to exit early, mimicking the legacy benchmark workflow.
 
 Everything else is optional experimentation.
 

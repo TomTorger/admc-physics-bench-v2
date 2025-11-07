@@ -3,11 +3,13 @@
 #include "admc/baseline/contact.hpp"
 #include "admc/core/mat3.hpp"
 #include "admc/core/vec3.hpp"
+#include "admc/solver/iteration_control.hpp"
 #include "admc/world/body.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <chrono>
 #include <vector>
 
 namespace admc::baseline
@@ -19,6 +21,17 @@ struct BaselineParams
     float slop{0.005f};
     float restitution{0.0f};
     float dt{1.0f / 60.0f};
+    ::admc::solver::IterationThresholds thresholds{};
+    bool use_adaptive_gate{true};
+};
+
+struct SolverMetrics
+{
+    int iterations{0};
+    float max_residual{0.0f};
+    double warmstart_ms{0.0};
+    double iteration_ms{0.0};
+    double total_ms{0.0};
 };
 
 namespace detail
@@ -88,18 +101,22 @@ inline void precompute_contact(
 }
 } // namespace detail
 
-inline void solve_baseline(
+inline SolverMetrics solve_baseline(
     std::vector<::admc::world::RigidBody>& bodies,
     std::vector<ContactConstraint>& contacts,
     const BaselineParams& params) noexcept
 {
+    SolverMetrics metrics{};
     if (contacts.empty())
     {
-        return;
+        return metrics;
     }
 
     const float restitution_clamp = std::clamp(params.restitution, 0.0f, 1.0f);
+    ::admc::solver::CompositeIterationGate gate(
+        ::admc::solver::CompositeIterationGate::Settings{params.thresholds, 2.0f});
 
+    const auto warmstart_begin = std::chrono::steady_clock::now();
     for (ContactConstraint& contact : contacts)
     {
         if (contact.body_a < 0 || contact.body_b < 0 ||
@@ -122,8 +139,14 @@ inline void solve_baseline(
         }
     }
 
+    const auto warmstart_end = std::chrono::steady_clock::now();
+    metrics.warmstart_ms = std::chrono::duration<double, std::milli>(warmstart_end - warmstart_begin).count();
+
+    const auto iteration_begin = std::chrono::steady_clock::now();
+    float max_residual = 0.0f;
     for (int iteration = 0; iteration < params.iterations; ++iteration)
     {
+        float iteration_residual = 0.0f;
         for (ContactConstraint& contact : contacts)
         {
             if (contact.effective_mass <= 0.0f ||
@@ -139,18 +162,18 @@ inline void solve_baseline(
 
             const ::admc::core::Vec3 vel_a = detail::compute_velocity(body_a, contact.ra);
             const ::admc::core::Vec3 vel_b = detail::compute_velocity(body_b, contact.rb);
-            const float relative_normal = ::admc::core::dot(contact.normal, vel_b - vel_a);
+            const float relative_normal_before = ::admc::core::dot(contact.normal, vel_b - vel_a);
 
             float restitution = std::clamp(contact.restitution, 0.0f, 1.0f);
             restitution = std::max(restitution, restitution_clamp);
 
             float bounce = 0.0f;
-            if (relative_normal < -1.0e-3f && restitution > 0.0f)
+            if (relative_normal_before < -1.0e-3f && restitution > 0.0f)
             {
-                bounce = -restitution * relative_normal;
+                bounce = -restitution * relative_normal_before;
             }
 
-            float delta_lambda = -(relative_normal + contact.bias + bounce) * contact.effective_mass;
+            float delta_lambda = -(relative_normal_before + contact.bias + bounce) * contact.effective_mass;
             const float previous = contact.accumulated_impulse;
             contact.accumulated_impulse = std::max(previous + delta_lambda, 0.0f);
             delta_lambda = contact.accumulated_impulse - previous;
@@ -162,7 +185,34 @@ inline void solve_baseline(
             const ::admc::core::Vec3 impulse = contact.normal * delta_lambda;
             detail::apply_impulse(body_a, -impulse, contact.ra);
             detail::apply_impulse(body_b, impulse, contact.rb);
+
+            const ::admc::core::Vec3 vel_a_after = detail::compute_velocity(body_a, contact.ra);
+            const ::admc::core::Vec3 vel_b_after = detail::compute_velocity(body_b, contact.rb);
+            const float relative_normal_after = ::admc::core::dot(contact.normal, vel_b_after - vel_a_after);
+            const float corrected = relative_normal_after + contact.bias;
+            iteration_residual = std::max(iteration_residual, std::fabs(corrected));
         }
+        if (params.use_adaptive_gate)
+        {
+            ::admc::solver::IterationSignals signals{
+                .constraint_residual = iteration_residual,
+                .penetration_error = iteration_residual,
+                .joint_error = 0.0f,
+                .admc_drift = 0.0f};
+            if (!gate.evaluate(signals).should_continue)
+            {
+                metrics.iterations = iteration + 1;
+                max_residual = iteration_residual;
+                break;
+            }
+        }
+        max_residual = iteration_residual;
+        metrics.iterations = iteration + 1;
     }
+    const auto iteration_end = std::chrono::steady_clock::now();
+    metrics.iteration_ms = std::chrono::duration<double, std::milli>(iteration_end - iteration_begin).count();
+    metrics.total_ms = metrics.warmstart_ms + metrics.iteration_ms;
+    metrics.max_residual = max_residual;
+    return metrics;
 }
 } // namespace admc::baseline

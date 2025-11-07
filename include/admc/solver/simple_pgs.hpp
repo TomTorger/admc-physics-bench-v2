@@ -4,14 +4,21 @@
 #include "admc/constraints/constraint_row.hpp"
 #include "admc/core/mat3.hpp"
 #include "admc/core/vec3.hpp"
+#include "admc/solver/conservation_tracker.hpp"
+#include "admc/solver/constraint_key.hpp"
 #include "admc/solver/iteration_control.hpp"
 #include "admc/solver/operators.hpp"
 #include "admc/solver/warmstart.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <unordered_map>
 #include <vector>
+#include <limits>
 
 namespace admc::solver
 {
@@ -28,6 +35,7 @@ struct ConstraintInstance
     ::admc::constraints::ConstraintRow row{};
     std::size_t body_a{0};
     std::size_t body_b{0};
+    ConstraintKey key{};
 };
 
 struct IslandState
@@ -43,6 +51,9 @@ struct SolverResult
     float max_penetration_error{0.0f};
     float max_joint_error{0.0f};
     float admc_drift{0.0f};
+    double warmstart_ms{0.0};
+    double iteration_ms{0.0};
+    double total_ms{0.0};
 };
 
 class SimplePGSSolver
@@ -58,7 +69,7 @@ public:
     SimplePGSSolver() noexcept;
     explicit SimplePGSSolver(const Options& options) noexcept;
 
-    [[nodiscard]] SolverResult solve(IslandState& island) const noexcept;
+    [[nodiscard]] SolverResult solve(IslandState& island, IConservationTracker* tracker = nullptr) const noexcept;
 
 private:
     struct MomentumSample
@@ -81,11 +92,19 @@ private:
         IslandState& island,
         const ConstraintOperator& op,
         std::vector<BodyStateView>& states,
-        float admc_drift) const noexcept;
+        float island_scale) const noexcept;
+
+    struct ConstraintCacheEntry
+    {
+        float lambda{0.0f};
+        float residual{0.0f};
+        float admc_drift{0.0f};
+    };
 
     Options options_{};
     CompositeIterationGate gate_;
     ManifoldWarmstartScaler scaler_;
+    mutable std::unordered_map<ConstraintKey, ConstraintCacheEntry, ConstraintKeyHasher> cache_;
 };
 
 inline SimplePGSSolver::SimplePGSSolver() noexcept : SimplePGSSolver(Options{}) {}
@@ -140,20 +159,20 @@ inline void SimplePGSSolver::warmstart_constraints(
     IslandState& island,
     const ConstraintOperator& op,
     std::vector<BodyStateView>& states,
-    float admc_drift) const noexcept
+    float island_scale) const noexcept
 {
     for (ConstraintInstance& constraint : island.constraints)
     {
-        if (constraint.row.lambda == 0.0f)
+        const auto cache_it = cache_.find(constraint.key);
+        if (cache_it != cache_.end())
         {
-            continue;
+            constraint.row.lambda = cache_it->second.lambda;
         }
-
         const ManifoldWarmstartSample sample{
-            .residual_norm = std::fabs(constraint.row.bias),
-            .admc_drift = admc_drift,
+            .residual_norm = (cache_it != cache_.end()) ? cache_it->second.residual : std::fabs(constraint.row.bias),
+            .admc_drift = (cache_it != cache_.end()) ? cache_it->second.admc_drift : 0.0f,
             .impulse_magnitude = std::fabs(constraint.row.lambda)};
-        const float scale = scaler_.scale_for(sample);
+        const float scale = scaler_.scale_for(sample) * island_scale;
         const float scaled_lambda = constraint.row.lambda * scale;
         constraint.row.lambda = scaled_lambda;
         if (scaled_lambda == 0.0f)
@@ -167,7 +186,7 @@ inline void SimplePGSSolver::warmstart_constraints(
     }
 }
 
-inline SolverResult SimplePGSSolver::solve(IslandState& island) const noexcept
+inline SolverResult SimplePGSSolver::solve(IslandState& island, IConservationTracker* island_tracker) const noexcept
 {
     SolverResult result{};
     if (island.bodies.empty() || island.constraints.empty())
@@ -190,23 +209,36 @@ inline SolverResult SimplePGSSolver::solve(IslandState& island) const noexcept
     ::admc::admc::DirectionalTracker tracker;
     tracker.record_pre(pre.mass, pre.momentum);
 
-    warmstart_constraints(island, op, state_views, 0.0f);
+    const auto warmstart_start = std::chrono::steady_clock::now();
+    if (island_tracker)
+    {
+        island_tracker->on_island_begin(0);
+    }
+    const float island_warm_scale = island_tracker ? island_tracker->warmstart_scale(0) : 1.0f;
+    warmstart_constraints(island, op, state_views, island_warm_scale);
+    const auto warmstart_end = std::chrono::steady_clock::now();
+    result.warmstart_ms = std::chrono::duration<double, std::milli>(warmstart_end - warmstart_start).count();
 
+    std::vector<float> residual_samples(island.constraints.size(), 0.0f);
+
+    const auto iteration_start = std::chrono::steady_clock::now();
+    IterationSignals last_signals{};
     for (int iter = 0; iter < options_.max_iterations; ++iter)
     {
         float max_residual = 0.0f;
         float max_penetration = 0.0f;
         float max_joint = 0.0f;
 
-        for (ConstraintInstance& constraint : island.constraints)
+        for (std::size_t ci = 0; ci < island.constraints.size(); ++ci)
         {
+            ConstraintInstance& constraint = island.constraints[ci];
             if (constraint.row.effective_mass <= 0.0f)
             {
                 continue;
             }
 
-            const float relative_velocity = op.apply_jacobian(constraint.row, constraint.body_a, constraint.body_b);
-            const float rhs = -constraint.row.bias - relative_velocity;
+            const float relative_velocity_before = op.apply_jacobian(constraint.row, constraint.body_a, constraint.body_b);
+            const float rhs = -constraint.row.bias - relative_velocity_before;
             const float delta_lambda = rhs * constraint.row.effective_mass;
             const float new_lambda = std::clamp(
                 constraint.row.lambda + delta_lambda,
@@ -223,14 +255,19 @@ inline SolverResult SimplePGSSolver::solve(IslandState& island) const noexcept
             }
 
             max_residual = std::max(max_residual, std::fabs(rhs));
+            const float relative_velocity_after = op.apply_jacobian(constraint.row, constraint.body_a, constraint.body_b);
+            const float corrected = -constraint.row.bias - relative_velocity_after;
+
             if (constraint.row.type == ::admc::constraints::ConstraintType::ContactNormal)
             {
-                max_penetration = std::max(max_penetration, std::fabs(rhs));
+                max_penetration = std::max(max_penetration, std::fabs(corrected));
             }
             else if (constraint.row.type == ::admc::constraints::ConstraintType::Joint)
             {
-                max_joint = std::max(max_joint, std::fabs(rhs));
+                max_joint = std::max(max_joint, std::fabs(corrected));
             }
+            max_residual = std::max(max_residual, std::fabs(corrected));
+            residual_samples[ci] = std::fabs(corrected);
         }
 
         tracker.record_post(pre.mass, sample_momentum(island, state_views).momentum);
@@ -241,6 +278,7 @@ inline SolverResult SimplePGSSolver::solve(IslandState& island) const noexcept
             .penetration_error = max_penetration,
             .joint_error = max_joint,
             .admc_drift = drift.momentum_norm};
+        last_signals = signals;
 
         result.iterations = iter + 1;
         result.max_residual = max_residual;
@@ -248,17 +286,35 @@ inline SolverResult SimplePGSSolver::solve(IslandState& island) const noexcept
         result.max_joint_error = max_joint;
         result.admc_drift = drift.momentum_norm;
 
-        const IterationPolicy policy = gate_.evaluate(signals);
+        const IterationPolicy policy = island_tracker ? island_tracker->on_iteration_end(0, signals) : gate_.evaluate(signals);
         if (!policy.should_continue)
         {
             break;
         }
     }
 
+    const auto iteration_end = std::chrono::steady_clock::now();
+    result.iteration_ms = std::chrono::duration<double, std::milli>(iteration_end - iteration_start).count();
+    result.total_ms = result.warmstart_ms + result.iteration_ms;
+
     for (std::size_t i = 0; i < island.bodies.size(); ++i)
     {
         island.bodies[i].linear_velocity = state_views[i].linear_velocity;
         island.bodies[i].angular_velocity = state_views[i].angular_velocity;
+    }
+
+    for (std::size_t ci = 0; ci < island.constraints.size(); ++ci)
+    {
+        const ConstraintInstance& constraint = island.constraints[ci];
+        cache_[constraint.key] = ConstraintCacheEntry{
+            constraint.row.lambda,
+            (ci < residual_samples.size()) ? residual_samples[ci] : 0.0f,
+            result.admc_drift};
+    }
+
+    if (island_tracker)
+    {
+        island_tracker->on_island_end(0, last_signals);
     }
 
     return result;
