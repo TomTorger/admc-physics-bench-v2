@@ -24,6 +24,11 @@ struct Vec3
         return {x - other.x, y - other.y, z - other.z};
     }
 
+    [[nodiscard]] constexpr Vec3 operator-() const noexcept
+    {
+        return {-x, -y, -z};
+    }
+
     [[nodiscard]] constexpr Vec3 operator*(float s) const noexcept
     {
         return {x * s, y * s, z * s};

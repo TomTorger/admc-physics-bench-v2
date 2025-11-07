@@ -11,7 +11,6 @@
 
 using admc::admc::ADMCChannels;
 using admc::admc::DirectionalTracker;
-using admc::admc::DirectionalChannels;
 using admc::admc::make_channels;
 using admc::admc::reconstruct_mass;
 using admc::admc::reconstruct_momentum;
@@ -237,4 +236,3 @@ int main()
     std::cout << "Core math tests passed\n";
     return 0;
 }
-#include "admc/constraints/constraint_row.hpp"
