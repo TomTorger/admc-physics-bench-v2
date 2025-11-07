@@ -61,6 +61,8 @@ public:
             .focus_island = focus};
     }
 
+    [[nodiscard]] const Settings& settings() const noexcept { return settings_; }
+
 private:
     Settings settings_{};
 };

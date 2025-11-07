@@ -20,6 +20,15 @@ class BenchResult:
     assembly_ms: float
     iterations: int
     residual: float
+    max_penetration: float
+    max_joint_error: float
+    admc_drift: float
+    tile_residual_min: float
+    tile_residual_p95: float
+    tile_residual_max: float
+    tile_drift_min: float
+    tile_drift_p95: float
+    tile_drift_max: float
 
 
 def run_single(
@@ -65,6 +74,15 @@ def run_single(
         assembly_ms=float(row.get("assembly_ms", 0.0)),
         iterations=int(row.get("iterations", 0)),
         residual=float(row.get("residual", 0.0)),
+        max_penetration=float(row.get("max_penetration", 0.0)),
+        max_joint_error=float(row.get("max_joint_error", 0.0)),
+        admc_drift=float(row.get("admc_drift", 0.0)),
+        tile_residual_min=float(row.get("tile_residual_min", 0.0)),
+        tile_residual_p95=float(row.get("tile_residual_p95", 0.0)),
+        tile_residual_max=float(row.get("tile_residual_max", 0.0)),
+        tile_drift_min=float(row.get("tile_drift_min", 0.0)),
+        tile_drift_p95=float(row.get("tile_drift_p95", 0.0)),
+        tile_drift_max=float(row.get("tile_drift_max", 0.0)),
     )
 
 

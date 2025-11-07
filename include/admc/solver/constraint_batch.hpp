@@ -25,6 +25,9 @@ struct TileRowSoA
     std::vector<::admc::core::Vec3> jacobian_linear_b;
     std::vector<::admc::core::Vec3> jacobian_angular_a;
     std::vector<::admc::core::Vec3> jacobian_angular_b;
+    // Precomputed angular terms: inverse_inertia * jacobian_angular_{a,b}
+    std::vector<::admc::core::Vec3> ang_effect_a;
+    std::vector<::admc::core::Vec3> ang_effect_b;
     std::vector<float> effective_mass;
     std::vector<float> bias;
     std::vector<float> lambda;

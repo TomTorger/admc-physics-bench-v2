@@ -1,5 +1,5 @@
 simple_bench: ./build/Debug/simple_bench.exe
-runs: 1
+runs: 5
 
 scenes:
   - name: two_spheres
@@ -18,14 +18,18 @@ scenes:
 solvers:
   - name: simple
     args:
-      - "--iterations=1"
+      - "--tile-diagnostics=on"
+      - "--tile-capacity=128"
+      - "--sor=1.2"
+      - "--iterations=12"
+      - "--steps=5"
       - "--residual=0.01"
       - "--penetration=0.01"
       - "--joint=0.01"
       - "--admc=0.005"
   - name: baseline
     args:
-      - "--iterations=1"
+      - "--iterations=12"
       - "--residual=0.01"
       - "--penetration=0.01"
       - "--joint=0.01"

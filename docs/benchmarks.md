@@ -71,3 +71,13 @@ All results include git SHA + build flags for reproducibility.
   - Penetration/joint error exceed limits,
   - Runtime regresses beyond tolerance vs baseline history.
 - Staple the bench script into CI to stop stability or performance regressions before landing.
+
+---
+
+## Current Output (CSV)
+
+- Per-run CSV columns (from `simple_bench`):
+  - Core: `scene`, `contacts`, `solver`, `total_ms`, `warm_ms`, `iteration_ms`, `assembly_ms`, `iterations`, `residual`.
+  - Quality: `max_penetration`, `max_joint_error`, `admc_drift`.
+  - Per-tile summaries (last iteration): `tile_residual_min`, `tile_residual_p95`, `tile_residual_max`, `tile_drift_min`, `tile_drift_p95`, `tile_drift_max`.
+- Aggregated summary CSV (Python bench) includes the same fields with medians across runs.

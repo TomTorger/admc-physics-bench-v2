@@ -33,10 +33,14 @@ enum class SolverMask : unsigned
 struct BenchConfig
 {
     int iterations{8};
+    int steps{1};
     float residual_threshold{1.0e-3f};
     float penetration_threshold{1.0e-3f};
     float joint_threshold{1.0e-3f};
     float admc_threshold{5.0e-4f};
+    bool tile_diagnostics{true};
+    float sor{1.0f};
+    int tile_capacity{64};
     SolverMask solvers{SolverMask::Both};
     std::string scene_filter{};
     std::string csv_path{};
@@ -60,6 +64,11 @@ BenchConfig parse_config(int argc, char** argv)
         {
             parse_float(arg.substr(11), config.residual_threshold);
         }
+        else if (arg.rfind("--steps=", 0) == 0)
+        {
+            config.steps = std::strtol(std::string(arg.substr(8)).c_str(), nullptr, 10);
+            if (config.steps < 1) config.steps = 1;
+        }
         else if (arg.rfind("--penetration=", 0) == 0)
         {
             parse_float(arg.substr(14), config.penetration_threshold);
@@ -71,6 +80,10 @@ BenchConfig parse_config(int argc, char** argv)
         else if (arg.rfind("--admc=", 0) == 0)
         {
             parse_float(arg.substr(7), config.admc_threshold);
+        }
+        else if (arg.rfind("--sor=", 0) == 0)
+        {
+            parse_float(arg.substr(6), config.sor);
         }
         else if (arg.rfind("--solver=", 0) == 0)
         {
@@ -87,6 +100,23 @@ BenchConfig parse_config(int argc, char** argv)
             {
                 config.solvers = SolverMask::Both;
             }
+        }
+        else if (arg.rfind("--tile-diagnostics=", 0) == 0)
+        {
+            const std::string value = std::string(arg.substr(19));
+            if (value == "off" || value == "false" || value == "0")
+            {
+                config.tile_diagnostics = false;
+            }
+            else if (value == "on" || value == "true" || value == "1")
+            {
+                config.tile_diagnostics = true;
+            }
+        }
+        else if (arg.rfind("--tile-capacity=", 0) == 0)
+        {
+            config.tile_capacity = std::strtol(std::string(arg.substr(16)).c_str(), nullptr, 10);
+            if (config.tile_capacity <= 0) config.tile_capacity = 64;
         }
         else if (arg.rfind("--scene=", 0) == 0)
         {
@@ -111,6 +141,15 @@ struct BenchMeasurement
     double iteration_ms{0.0};
     int iterations{0};
     float residual{0.0f};
+    float max_penetration{0.0f};
+    float max_joint_error{0.0f};
+    float admc_drift{0.0f};
+    float tile_residual_min{0.0f};
+    float tile_residual_max{0.0f};
+    float tile_residual_p95{0.0f};
+    float tile_drift_min{0.0f};
+    float tile_drift_max{0.0f};
+    float tile_drift_p95{0.0f};
 };
 
 bool has_solver(SolverMask mask, SolverMask flag)
@@ -129,6 +168,7 @@ int main(int argc, char** argv)
     baseline_params.slop = config.penetration_threshold;
     baseline_params.beta = 0.25f;
     baseline_params.restitution = 0.0f;
+    const float drift_vscale = 9.81f * baseline_params.dt;
 
     SimplePGSSolver::Options simple_options{};
     simple_options.max_iterations = config.iterations;
@@ -136,12 +176,17 @@ int main(int argc, char** argv)
     simple_options.gate_settings.thresholds.penetration = config.penetration_threshold;
     simple_options.gate_settings.thresholds.joint = config.joint_threshold;
     simple_options.gate_settings.thresholds.admc = config.admc_threshold;
+    simple_options.drift_velocity_scale = drift_vscale;
     admc::solver::AdaptiveConservationTracker simple_tracker(simple_options.gate_settings);
-    admc::solver::ConstraintBatchCache batch_cache;
+    admc::solver::ConstraintBatchCache batch_cache(static_cast<std::size_t>(config.tile_capacity));
     admc::solver::TilePGSSolver tile_solver(admc::solver::TilePGSSolver::Options{
         .max_iterations = simple_options.max_iterations,
         .gate_settings = simple_options.gate_settings,
-        .warmstart_settings = simple_options.warmstart_settings});
+        .warmstart_settings = simple_options.warmstart_settings,
+        .collect_tile_diagnostics = config.tile_diagnostics,
+        .tile_diagnostics_last_iteration_only = true,
+        .sor = config.sor,
+        .drift_velocity_scale = drift_vscale});
 
     std::vector<BenchMeasurement> measurements;
 
@@ -167,29 +212,64 @@ int main(int argc, char** argv)
                 metrics.warmstart_ms,
                 metrics.iteration_ms,
                 metrics.iterations,
-                metrics.max_residual});
+                metrics.max_residual,
+                /*max_penetration*/ 0.0f,
+                /*max_joint_error*/ 0.0f,
+                /*admc_drift*/ 0.0f,
+                /*tile_residual_min*/ 0.0f,
+                /*tile_residual_max*/ 0.0f,
+                /*tile_residual_p95*/ 0.0f,
+                /*tile_drift_min*/ 0.0f,
+                /*tile_drift_max*/ 0.0f,
+                /*tile_drift_p95*/ 0.0f});
         }
 
         if (has_solver(config.solvers, SolverMask::Simple))
         {
             auto island = admc::scene::build_simple_island(scene, baseline_params);
-            const auto assembly_start = std::chrono::steady_clock::now();
-            admc::solver::ConstraintBatch& batch = batch_cache.rebuild(scene_index, island);
             std::vector<float>& residuals = batch_cache.residuals(scene_index);
-            const auto assembly_end = std::chrono::steady_clock::now();
-            const double assembly_ms = std::chrono::duration<double, std::milli>(assembly_end - assembly_start).count();
-            const auto result = tile_solver.solve(island, batch, residuals, &simple_tracker);
+
+            double assembly_accum_ms = 0.0;
+            admc::solver::TilePGSSolver::SolverResult last_result{};
+            for (int step = 0; step < config.steps; ++step)
+            {
+                if (step == 0)
+                {
+                    // Cold build measured as assembly
+                    const auto assembly_start = std::chrono::steady_clock::now();
+                    (void)batch_cache.rebuild(scene_index, island);
+                    const auto assembly_end = std::chrono::steady_clock::now();
+                    assembly_accum_ms += std::chrono::duration<double, std::milli>(assembly_end - assembly_start).count();
+                }
+                else
+                {
+                    // Reuse batch across frames; no assembly work
+                }
+                // Solve using the cached batch
+                admc::solver::ConstraintBatch& batch = batch_cache.get(scene_index).batch;
+                last_result = tile_solver.solve(island, batch, residuals, &simple_tracker);
+            }
+            const double assembly_ms = (config.steps > 0) ? (assembly_accum_ms / static_cast<double>(config.steps)) : 0.0;
 
             measurements.push_back(BenchMeasurement{
                 scene.name,
                 "simple_pgs",
                 island.constraints.size(),
                 assembly_ms,
-                result.total_ms,
-                result.warmstart_ms,
-                result.iteration_ms,
-                result.iterations,
-                result.max_residual});
+                last_result.total_ms,
+                last_result.warmstart_ms,
+                last_result.iteration_ms,
+                last_result.iterations,
+                last_result.max_residual,
+                last_result.max_penetration_error,
+                last_result.max_joint_error,
+                last_result.admc_drift,
+                last_result.tile_residual_min,
+                last_result.tile_residual_max,
+                last_result.tile_residual_p95,
+                last_result.tile_drift_min,
+                last_result.tile_drift_max,
+                last_result.tile_drift_p95});
         }
     }
 
@@ -199,7 +279,7 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    std::cout << "Scene           Solver        Contacts  Assembly  Total(ms)  Warm(ms)  Iter(ms)  Iterations  Residual\n";
+    std::cout << "Scene           Solver        Contacts  Assembly  Total(ms)  Warm(ms)  Iter(ms)  Iterations  Residual   Penetr.   JointErr   ADMC     tResMin   tResP95   tResMax   tDrMin    tDrP95    tDrMax\n";
     for (const BenchMeasurement& m : measurements)
     {
         std::cout << std::left << std::setw(15) << m.scene << ' '
@@ -213,7 +293,16 @@ int main(int argc, char** argv)
                   << std::setw(9) << m.iteration_ms << ' '
                   << std::defaultfloat
                   << std::setw(11) << m.iterations << ' '
-                  << std::fixed << std::setprecision(4) << std::setw(9) << m.residual << '\n'
+                  << std::fixed << std::setprecision(4) << std::setw(9) << m.residual << ' '
+                  << std::fixed << std::setprecision(4) << std::setw(9) << m.max_penetration << ' '
+                  << std::fixed << std::setprecision(4) << std::setw(9) << m.max_joint_error << ' '
+                  << std::fixed << std::setprecision(4) << std::setw(9) << m.admc_drift << ' '
+                  << std::fixed << std::setprecision(4) << std::setw(9) << m.tile_residual_min << ' '
+                  << std::fixed << std::setprecision(4) << std::setw(9) << m.tile_residual_p95 << ' '
+                  << std::fixed << std::setprecision(4) << std::setw(9) << m.tile_residual_max << ' '
+                  << std::fixed << std::setprecision(4) << std::setw(9) << m.tile_drift_min << ' '
+                  << std::fixed << std::setprecision(4) << std::setw(9) << m.tile_drift_p95 << ' '
+                  << std::fixed << std::setprecision(4) << std::setw(9) << m.tile_drift_max << '\n'
                   << std::defaultfloat;
     }
 
@@ -227,7 +316,7 @@ int main(int argc, char** argv)
         std::ofstream csv(path);
         if (csv.is_open())
         {
-            csv << "scene,contacts,solver,total_ms,warm_ms,iteration_ms,assembly_ms,iterations,residual\n";
+            csv << "scene,contacts,solver,total_ms,warm_ms,iteration_ms,assembly_ms,iterations,residual,max_penetration,max_joint_error,admc_drift,tile_residual_min,tile_residual_p95,tile_residual_max,tile_drift_min,tile_drift_p95,tile_drift_max\n";
             for (const BenchMeasurement& m : measurements)
             {
                 csv << m.scene << ','
@@ -238,7 +327,16 @@ int main(int argc, char** argv)
                     << m.iteration_ms << ','
                     << m.assembly_ms << ','
                     << m.iterations << ','
-                    << m.residual << '\n';
+                    << m.residual << ','
+                    << m.max_penetration << ','
+                    << m.max_joint_error << ','
+                    << m.admc_drift << ','
+                    << m.tile_residual_min << ','
+                    << m.tile_residual_p95 << ','
+                    << m.tile_residual_max << ','
+                    << m.tile_drift_min << ','
+                    << m.tile_drift_p95 << ','
+                    << m.tile_drift_max << '\n';
             }
             std::cout << "CSV written to " << path << '\n';
         }

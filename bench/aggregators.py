@@ -28,6 +28,15 @@ def summarize(results: Iterable[BenchResult]) -> List[BenchResult]:
                 assembly_ms=median(r.assembly_ms for r in rows),
                 iterations=int(median(r.iterations for r in rows)),
                 residual=median(r.residual for r in rows),
+                max_penetration=median(r.max_penetration for r in rows),
+                max_joint_error=median(r.max_joint_error for r in rows),
+                admc_drift=median(r.admc_drift for r in rows),
+                tile_residual_min=median(r.tile_residual_min for r in rows),
+                tile_residual_p95=median(r.tile_residual_p95 for r in rows),
+                tile_residual_max=median(r.tile_residual_max for r in rows),
+                tile_drift_min=median(r.tile_drift_min for r in rows),
+                tile_drift_p95=median(r.tile_drift_p95 for r in rows),
+                tile_drift_max=median(r.tile_drift_max for r in rows),
             )
         )
     return summary
@@ -48,6 +57,15 @@ def write_csv(path: Path, rows: List[BenchResult]) -> None:
                 "assembly_ms",
                 "iterations",
                 "residual",
+                "max_penetration",
+                "max_joint_error",
+                "admc_drift",
+                "tile_residual_min",
+                "tile_residual_p95",
+                "tile_residual_max",
+                "tile_drift_min",
+                "tile_drift_p95",
+                "tile_drift_max",
             ],
         )
         writer.writeheader()
@@ -63,5 +81,14 @@ def write_csv(path: Path, rows: List[BenchResult]) -> None:
                     "assembly_ms": f"{row.assembly_ms:.6f}",
                     "iterations": row.iterations,
                     "residual": f"{row.residual:.6f}",
+                    "max_penetration": f"{row.max_penetration:.6f}",
+                    "max_joint_error": f"{row.max_joint_error:.6f}",
+                    "admc_drift": f"{row.admc_drift:.6f}",
+                    "tile_residual_min": f"{row.tile_residual_min:.6f}",
+                    "tile_residual_p95": f"{row.tile_residual_p95:.6f}",
+                    "tile_residual_max": f"{row.tile_residual_max:.6f}",
+                    "tile_drift_min": f"{row.tile_drift_min:.6f}",
+                    "tile_drift_p95": f"{row.tile_drift_p95:.6f}",
+                    "tile_drift_max": f"{row.tile_drift_max:.6f}",
                 }
             )

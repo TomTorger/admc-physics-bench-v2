@@ -43,16 +43,14 @@
 
 ## Reporting Guidelines
 
-- Every bench run prints:
-  - `max_penetration`, `rms_penetration`
-  - `max_joint_error`, `rms_joint_error`
-  - `max_admc_drift`, `rms_admc_drift`
-  - Timings by phase
-- JSON/CSV output includes per-island stats when requested.
+- Bench display vs CSV output:
+  - Display: solvers print aggregate timings; ADMC drift is used for iteration gating but is not currently printed.
+  - CSV (current): `scene`, `contacts`, `solver`, `total_ms`, `warm_ms`, `iteration_ms`, `assembly_ms`, `iterations`, `residual`.
+  - CSV (planned): add `max_penetration`, `max_joint_error`, `max_admc_drift` and optional per-tile breakdowns.
 
 ---
 
-## Alarm Thresholds (defaults – tune per project)
+## Alarm Thresholds (defaults — tune per project)
 
 - Penetration > 1e-3 m → fail test.
 - Joint error > 1e-3 rad/m → fail test.

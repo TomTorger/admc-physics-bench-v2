@@ -56,15 +56,17 @@ struct SolverResult
     double total_ms{0.0};
 };
 
-class SimplePGSSolver
-{
-public:
-    struct Options
+    class SimplePGSSolver
     {
-        int max_iterations{8};
-        CompositeIterationGate::Settings gate_settings{};
-        ManifoldWarmstartScaler::Settings warmstart_settings{};
-    };
+    public:
+        struct Options
+        {
+            int max_iterations{8};
+            CompositeIterationGate::Settings gate_settings{};
+            ManifoldWarmstartScaler::Settings warmstart_settings{};
+            // Normalization velocity scale for ADMC drift (e.g., g * dt)
+            float drift_velocity_scale{9.81f / 60.0f};
+        };
 
     SimplePGSSolver() noexcept;
     explicit SimplePGSSolver(const Options& options) noexcept;
@@ -270,21 +272,23 @@ inline SolverResult SimplePGSSolver::solve(IslandState& island, IConservationTra
             residual_samples[ci] = std::fabs(corrected);
         }
 
-        tracker.record_post(pre.mass, sample_momentum(island, state_views).momentum);
-        const DriftSample drift = make_drift_sample(tracker);
+    tracker.record_post(pre.mass, sample_momentum(island, state_views).momentum);
+    const DriftSample drift = make_drift_sample(tracker);
+    const float denom = std::max(pre.mass * options_.drift_velocity_scale, 1.0e-9f);
+    const float normalized_drift = drift.momentum_norm / denom;
 
         IterationSignals signals{
             .constraint_residual = max_residual,
             .penetration_error = max_penetration,
             .joint_error = max_joint,
-            .admc_drift = drift.momentum_norm};
+            .admc_drift = normalized_drift};
         last_signals = signals;
 
         result.iterations = iter + 1;
         result.max_residual = max_residual;
         result.max_penetration_error = max_penetration;
         result.max_joint_error = max_joint;
-        result.admc_drift = drift.momentum_norm;
+        result.admc_drift = normalized_drift;
 
         const IterationPolicy policy = island_tracker ? island_tracker->on_iteration_end(0, signals) : gate_.evaluate(signals);
         if (!policy.should_continue)
