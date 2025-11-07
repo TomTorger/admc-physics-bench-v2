@@ -13,8 +13,23 @@ if (ADMC_ENABLE_WARNINGS)
         $<$<CXX_COMPILER_ID:MSVC>:/W4 /permissive->)
 endif()
 
-add_executable(core_tests tests/test_core.cpp)
+add_executable(core_tests tests/test_math.cpp)
 target_link_libraries(core_tests PRIVATE admc_core)
+
+add_executable(solver_policy_tests tests/test_solver_policies.cpp)
+target_link_libraries(solver_policy_tests PRIVATE admc_core)
+
+add_executable(simple_pgs_tests tests/test_simple_pgs.cpp)
+target_link_libraries(simple_pgs_tests PRIVATE admc_core)
+
+add_executable(baseline_tests tests/test_baseline_solver.cpp)
+target_link_libraries(baseline_tests PRIVATE admc_core)
+
+add_executable(simple_bench apps/simple_bench.cpp)
+target_link_libraries(simple_bench PRIVATE admc_core)
 
 enable_testing()
 add_test(NAME core_tests COMMAND $<TARGET_FILE:core_tests>)
+add_test(NAME solver_policy_tests COMMAND $<TARGET_FILE:solver_policy_tests>)
+add_test(NAME simple_pgs_tests COMMAND $<TARGET_FILE:simple_pgs_tests>)
+add_test(NAME baseline_tests COMMAND $<TARGET_FILE:baseline_tests>)

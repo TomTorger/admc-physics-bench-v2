@@ -250,6 +250,24 @@ Used by: `solver_core`, `parallel`, `api`.
   * Announce pre/post step.
   * Obtain **iteration policy per island**.
   * Obtain **warm-start scale per island**.
+* Operator surface:
+
+  * `admc/solver/operators.hpp` exposes `ConstraintOperator`, so higher-order solvers (block/ADMM/Krylov) can reuse the same Jacobian + mass-operator hooks without touching AoS data.
+* Prototype:
+
+  * `admc/solver/simple_pgs.hpp` wires the composite iteration gate + manifold warm-start scaler into a header-only solver, used by tests and the tiny bench app.
+
+---
+
+### 6.6a `baseline/`
+
+* AoS sequential-impulse solver ported from the original repo.
+* `admc/baseline/contact.hpp` + `admc/baseline/solver.hpp` keep the scalar reference path alive:
+
+  * `ContactConstraint` stores AoS contact state and cached denominators.
+  * `solve_baseline(...)` runs Baumgarte-stabilized sequential impulses directly on `world::RigidBody`.
+* Used for regression parity (`baseline_tests`) and bench comparisons (`simple_bench --solver=baseline`).
+
 
 **Entry:**
 
@@ -490,6 +508,10 @@ All variants consume `WorldSoA` + `ConstraintBatch` and may use `IConservationTr
 
        * `shouldContinue` = false when residual **and** ADMC drift are below thresholds.
        * `focusThisIsland` = true for “difficult” islands → scheduler can spend more iterations there.
+   * `CompositeIterationGate` (`admc/solver/iteration_control.hpp`) is the canonical reducer:
+
+     * Bundles residual, penetration, joint, and ADMC drift signals.
+     * Sets `focusThisIsland` when ADMC drift dominates the residual budget.
 
 2. **Warm-start scaling (per island, per frame)**
 
@@ -500,6 +522,7 @@ All variants consume `WorldSoA` + `ConstraintBatch` and may use `IConservationTr
 
      * `j_warm = warmstart_scale * j_cached`.
    * High drift last frame → smaller scale, avoiding overshoot and improving stability.
+   * Tile/manifold override: `ManifoldWarmstartScaler` (`admc/solver/warmstart.hpp`) provides per-manifold scalars driven by residual + ADMC drift + cached impulse magnitude.
 
 3. **Tile-level focus (optional)**
 
@@ -566,6 +589,7 @@ All variants consume `WorldSoA` + `ConstraintBatch` and may use `IConservationTr
     * Same ADMC thresholds,
     * Same residual targets.
   * Verify ADMC-aware policies **improve convergence or cost** vs fixed-iteration baselines.
+  * `apps/simple_bench` provides a smoke-test harness for `simple::pgs` (and the AoS baseline via `--solver=baseline`) so solver hooks can be exercised without the full assembly stack.
 
 * **Debug paths:**
 

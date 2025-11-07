@@ -95,6 +95,7 @@ Important:
 | `baseline::AoS` | Regression truth | Works on AoS rows, no tiles; kept for tests only. |
 | `pgs::scalar` | Simple reference | Operates on row arrays; useful for debugging assembly without tiles. |
 | `pgs::tile` | Default high-perf path | Uses SoA tiles, SIMD kernels, ADMC tracker for warm-start + iterations. |
+| `simple::pgs` | Header-only toy solver | `admc/solver/simple_pgs.hpp` exercises the composite gate + manifold warm-start scaler. |
 | `block::manifold` | Boost manifolds/joints | Small dense solves per manifold; plugs into tile pipeline. |
 | `krylov::anderson` | Experimental acceleration | Wraps `pgs::tile` iterations with Anderson / Krylov steps. |
 | `admm::prototype` | Research slot | Uses the same `ConstraintBatch`; proves we can reuse layout. |
@@ -115,5 +116,10 @@ Every new solver must:
   - ADMC drift,
   - timings (warm-start, iterations, scatter).
 - Bench harness can flip between solvers via CLI flag; no bespoke wiring allowed.
+- Unit targets:
+  - `core_tests` keep Vec3/Mat3/RigidBody math honest.
+  - `solver_policy_tests` lock down iteration gates, warm-start scaling, and the constraint-operator surface.
+  - `simple_pgs_tests` ensure the toy solver reduces relative velocities and respects impulse bounds.
+  - `baseline_tests` keep the AoS sequential impulse reference solver aligned with the original repo.
 
 Fail any of these checks and the solver does not land.

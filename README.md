@@ -30,8 +30,13 @@ Not a full engine—this is a solver playground.
 ## Quick Start
 
 1. Read `docs/architecture_overview.md` to understand the stack.
-2. Build the bench app.
-3. Run a scene with both the baseline and SoA solvers; compare ADMC drift + timings.
+2. Build the bench app (`simple_bench`) or the unit suites.
+3. Run the lightweight bench to explore iteration thresholds:
+   ```bash
+   ./build/simple_bench --iterations=12 --admc=0.0002
+   ```
+   Add `--solver=baseline` to compare against the AoS baseline derived from the original repo.
+4. Run a scene with both the baseline and SoA solvers; compare ADMC drift + timings.
 
 Everything else is optional experimentation.
 
